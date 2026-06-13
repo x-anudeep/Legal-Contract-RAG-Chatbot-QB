@@ -3,9 +3,7 @@
 A Retrieval-Augmented Generation (RAG) chatbot for legal contract review, built on the
 [Contract Understanding Atticus Dataset (CUAD) v1](https://zenodo.org/records/4595826).
 
-Given a natural language question such as _"Does this contract have a non-compete clause?"_
-or _"What is the governing law?"_, the system retrieves the relevant contract passage and
-returns a grounded, cited answer.
+Given a natural language question such as "Does this contract have a non-compete clause?" or "What is the governing law?", the system retrieves the relevant contract passage and returns a grounded, cited answer.
 
 ---
 
@@ -32,10 +30,10 @@ paragraph, 41 questions are asked - one per clause category. Each question has:
 
 - `context` - the raw paragraph text from the contract
 - `qas[]` - list of 41 QA pairs, one per clause category
-  - `id` - the clause category name (e.g. `"Governing Law"`)
+  - `id` - the clause category name (e.g. "Governing Law")
   - `question` - the natural language question for that category
-  - `is_impossible` - `false` if the clause is present in this paragraph, `true` if absent
-  - `answers[]` - list of `{text, answer_start}` spans when `is_impossible` is false
+  - `is_impossible` - false if the clause is present in this paragraph, true if absent
+  - `answers[]` - list of {text, answer_start} spans when is_impossible is false
 
 ### What master_clauses.csv contains
 
@@ -43,7 +41,7 @@ paragraph, 41 questions are asked - one per clause category. Each question has:
 - Rows 2-511: one contract per row
 - For each clause category there are two columns:
   - `[Category Name]` - the full clause text extracted from the contract
-  - `[Category Name] Answer` - the normalized answer (e.g. `"Nevada"`, `"Yes"`, `"No"`, `"5/8/2014"`)
+  - `[Category Name] Answer` - the normalized answer (e.g. "Nevada", "Yes", "No", "5/8/2014")
 - Empty cell = clause not present in that contract
 
 ### The 41 clause categories
@@ -141,7 +139,7 @@ print(f"Answer spans: {qa['answers']}")
 ```
 
 Expected output: you should see a contract filename, a paragraph of legal text, a clause
-category name like `"Governing Law"`, and either answer spans or an empty list.
+category name like "Governing Law", and either answer spans or an empty list.
 
 ---
 
@@ -208,8 +206,8 @@ if __name__ == "__main__":
 - `contract_name` - which of the 510 contracts this came from
 - `chunk_index` - position of this paragraph within that contract
 - `text` - the cleaned paragraph text (this is what gets embedded)
-- `clause_categories` - list of clause types found in this paragraph (e.g. `["Governing Law"]`)
-- `answers` - list of corresponding answers (e.g. `["Nevada"]`)
+- `clause_categories` - list of clause types found in this paragraph (e.g. ["Governing Law"])
+- `answers` - list of corresponding answers (e.g. ["Nevada"])
 
 A paragraph can contain multiple clause types - e.g. a single paragraph may be labeled
 as both `Termination for Convenience` and `Notice to Terminate Renewal`.
@@ -809,8 +807,8 @@ export default function App() {
 | What | Where | Goes to |
 |---|---|---|
 | `/chat` endpoint | `POST localhost:8000/chat` | Person C |
-| Request schema | `{question: str, clause_filter: str or null}` | Person C |
-| Response schema | `{answer: str, sources: [{contract, clause_categories, text_preview}]}` | Person C |
+| Request schema | question (str), clause_filter (str or null) | Person C |
+| Response schema | answer (str), sources (list of contract, clause_categories, text_preview) | Person C |
 
 ---
 
