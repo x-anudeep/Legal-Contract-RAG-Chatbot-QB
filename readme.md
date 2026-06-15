@@ -93,6 +93,10 @@ GEMINI_MODEL=gemini-3.5-flash
 Real retrieval later:
 
 ```bash
+bsdtar -xf ingestion.zip
+docker run -p 6333:6333 qdrant/qdrant
+python ingestion/load_qdrant_from_cache.py
+
 export RETRIEVER_MODE=real
 export QDRANT_URL=http://localhost:6333
 export QDRANT_COLLECTION=cuad_contracts
@@ -104,4 +108,43 @@ OpenAI generation later:
 ```bash
 export GENERATOR_MODE=openai
 export OPENAI_API_KEY=your-key-here
+```
+
+## Team Integration
+
+Person A artifacts are included as:
+
+```text
+ingestion_pipeline.ipynb
+ingestion.zip
+evaluation/chunks_metadata.csv
+```
+
+Extract `ingestion.zip` locally to get:
+
+```text
+ingestion/bm25_index.pkl
+ingestion/embeddings_cache.pkl
+```
+
+Those `.pkl` files are ignored by git because they are generated/runtime artifacts.
+
+Person C evaluation files are under `evaluation/`:
+
+```text
+build_test_set.py
+retrieval_eval.py
+generation_eval.py
+ragas_eval.py
+dashboard.py
+scorer.py
+eval_test_set.csv
+```
+
+Run a quick evaluation smoke test after the backend is running:
+
+```bash
+python evaluation/scorer.py
+python evaluation/retrieval_eval.py --sample 10
+python evaluation/generation_eval.py --sample 5
 ```

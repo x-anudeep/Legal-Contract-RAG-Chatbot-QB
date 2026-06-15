@@ -125,15 +125,26 @@ def _with_preview(chunk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def mock_retrieve(query: str, clause_filter: str | None = None, top_k: int = 5) -> list[dict[str, Any]]:
+def _matches_clause_filter(chunk: dict[str, Any], clause_filter: str | None) -> bool:
     normalized_filter = normalize_clause_category(clause_filter)
+    if not normalized_filter:
+        return True
+
+    categories = [
+        normalize_clause_category(category)
+        for category in chunk.get("clause_categories", [])
+    ]
+    return normalized_filter in categories
+
+
+def mock_retrieve(query: str, clause_filter: str | None = None, top_k: int = 5) -> list[dict[str, Any]]:
     candidates = MOCK_CHUNKS
 
-    if normalized_filter:
+    if clause_filter:
         filtered = [
             chunk
             for chunk in MOCK_CHUNKS
-            if normalized_filter in [normalize_clause_category(c) for c in chunk["clause_categories"]]
+            if _matches_clause_filter(chunk, clause_filter)
         ]
         candidates = filtered or MOCK_CHUNKS
 
@@ -156,13 +167,8 @@ def reciprocal_rank_fusion(rank_lists: list[list[int]], k: int = 60) -> list[int
 class RealRetriever:
     def __init__(self) -> None:
         from qdrant_client import QdrantClient
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
         from rank_bm25 import BM25Okapi
         from sentence_transformers import SentenceTransformer
-
-        self.Filter = Filter
-        self.FieldCondition = FieldCondition
-        self.MatchValue = MatchValue
 
         qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
         self.collection_name = os.getenv("QDRANT_COLLECTION", "cuad_contracts")
@@ -178,24 +184,12 @@ class RealRetriever:
 
     def retrieve(self, query: str, clause_filter: str | None = None, top_k: int = 20) -> list[dict[str, Any]]:
         q_vec = self.model.encode(query, normalize_embeddings=True).tolist()
-
-        qdrant_filter = None
-        normalized_filter = normalize_clause_category(clause_filter)
-        if normalized_filter:
-            qdrant_filter = self.Filter(
-                must=[
-                    self.FieldCondition(
-                        key="clause_categories",
-                        match=self.MatchValue(value=normalized_filter),
-                    )
-                ]
-            )
+        candidate_limit = max(top_k * 5, 50)
 
         dense_hits = self.client.search(
             collection_name=self.collection_name,
             query_vector=q_vec,
-            query_filter=qdrant_filter,
-            limit=top_k,
+            limit=candidate_limit,
         )
         dense_ids = [int(hit.id) for hit in dense_hits]
 
@@ -204,21 +198,32 @@ class RealRetriever:
             range(len(bm25_scores)),
             key=lambda i: bm25_scores[i],
             reverse=True,
-        )[:top_k]
+        )[:candidate_limit]
+        bm25_ids = [int(self.chunk_ids[index]) for index in bm25_ids]
 
-        fused_ids = reciprocal_rank_fusion([dense_ids, bm25_ids])[:top_k]
+        fused_ids = reciprocal_rank_fusion([dense_ids, bm25_ids])[:candidate_limit]
         results = self.client.retrieve(
             collection_name=self.collection_name,
             ids=fused_ids,
             with_payload=True,
         )
 
-        chunks = []
+        chunks_by_id = {}
         for result in results:
             payload = result.payload or {}
             payload["chunk_id"] = int(result.id)
-            chunks.append(_with_preview(payload))
-        return chunks
+            chunks_by_id[int(result.id)] = _with_preview(payload)
+
+        chunks = [
+            chunks_by_id[chunk_id]
+            for chunk_id in fused_ids
+            if chunk_id in chunks_by_id
+        ]
+
+        filtered_chunks = [
+            chunk for chunk in chunks if _matches_clause_filter(chunk, clause_filter)
+        ]
+        return (filtered_chunks or chunks)[:top_k]
 
 
 _REAL_RETRIEVER: RealRetriever | None = None
