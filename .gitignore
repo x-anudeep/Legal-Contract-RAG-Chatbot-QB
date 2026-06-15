@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+
+node_modules/
+dist/
+
+ingestion/*.pkl
+ingestion.zip
+qdrant_storage/
+
