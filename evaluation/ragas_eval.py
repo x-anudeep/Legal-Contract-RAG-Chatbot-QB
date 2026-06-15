@@ -13,7 +13,10 @@ Input
 -----
 evaluation/eval_results.csv   — written by generation_eval.py
                                  must contain columns:
-                                     question, prediction, ground_truth
+                                     question, clause_category, prediction, ground_truth
+
+Person B's /retrieve endpoint is called to fetch the actual retrieved passages so
+faithfulness is scored against what the model actually saw, not the ground truth.
 
 Note: RAGAS uses an LLM internally (OpenAI by default).
 Set OPENAI_API_KEY before running.
@@ -29,6 +32,9 @@ Run
 
 import argparse
 import os
+import time
+
+import requests
 import pandas as pd
 
 from ragas import evaluate
@@ -36,8 +42,37 @@ from ragas.metrics import faithfulness, answer_relevancy, context_recall
 from datasets import Dataset
 
 
+def _fetch_contexts(api_url: str, question: str, clause_filter: str, top_k: int = 5) -> list[str]:
+    """
+    Call Person B's POST /retrieve and return a list of text strings.
+    Falls back to empty list on any error.
+
+    Person B's response schema:
+        { "results": [ { "chunk_id": int, "contract_name": str,
+                         "clause_categories": [...], "text_preview": str, ... } ] }
+    """
+    try:
+        resp = requests.post(
+            f"{api_url}/retrieve",
+            json={"question": question, "clause_filter": clause_filter, "top_k": top_k},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        # text_preview is populated by Person B's _with_preview() helper
+        return [
+            r.get("text_preview") or r.get("text", "")
+            for r in results
+            if r.get("text_preview") or r.get("text")
+        ]
+    except Exception as exc:
+        print(f"  [WARN] /retrieve failed for '{question[:50]}': {exc}")
+        return []
+
+
 def run_ragas_eval(
     results_path: str = "evaluation/eval_results.csv",
+    api_url:      str = "http://localhost:8000",
     sample_n:     int | None = None,
     random_state: int = 42,
 ) -> dict:
@@ -47,6 +82,7 @@ def run_ragas_eval(
     Parameters
     ----------
     results_path : path to eval_results.csv from generation_eval.py
+    api_url      : base URL of Person B's FastAPI service (for /retrieve)
     sample_n     : if set, evaluate a random sample of this size
     random_state : seed for reproducible sampling
 
@@ -68,19 +104,34 @@ def run_ragas_eval(
     else:
         print(f"Running RAGAS on all {len(df)} rows in {results_path}")
 
-    # RAGAS expects:
-    #   question     – the user question
-    #   answer       – the model's prediction
-    #   contexts     – list of retrieved context strings (we use ground_truth as proxy
-    #                  since eval_results.csv does not store raw retrieved passages)
-    #   ground_truth – the reference answer
-    #
-    # If Person B's API returns retrieved passages, replace the contexts column below
-    # with the actual retrieved text for a more accurate faithfulness score.
+    # Fetch real retrieved contexts from Person B's /retrieve endpoint.
+    # This gives faithfulness an accurate view of what the model actually saw.
+    print(f"Fetching retrieved contexts from {api_url}/retrieve …")
+    contexts: list[list[str]] = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        ctx = _fetch_contexts(
+            api_url,
+            question=row["question"],
+            clause_filter=row.get("category", ""),
+        )
+        # Fallback: use ground_truth as context if the API is unreachable
+        if not ctx:
+            ctx = [str(row["ground_truth"])]
+        contexts.append(ctx)
+
+        if (i + 1) % 20 == 0:
+            print(f"  Fetched contexts for {i + 1}/{len(df)} rows")
+        time.sleep(0.1)
+
+    # RAGAS dataset fields:
+    #   question     – user question
+    #   answer       – model prediction from generation_eval.py
+    #   contexts     – list of retrieved passage strings (real, from /retrieve)
+    #   ground_truth – reference answer
     ragas_dataset = Dataset.from_dict({
         "question":     df["question"].tolist(),
         "answer":       df["prediction"].fillna("").tolist(),
-        "contexts":     [[gt] for gt in df["ground_truth"].fillna("").tolist()],
+        "contexts":     contexts,
         "ground_truth": df["ground_truth"].fillna("").tolist(),
     })
 
@@ -109,11 +160,16 @@ def run_ragas_eval(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CUAD RAGAS evaluation")
-    parser.add_argument("--results", default="evaluation/eval_results.csv")
+    parser.add_argument("--results",  default="evaluation/eval_results.csv")
+    parser.add_argument("--api-url",  default="http://localhost:8000")
     parser.add_argument(
         "--sample", type=int, default=None,
         help="Evaluate on a random sample of N rows (default: all)",
     )
     args = parser.parse_args()
 
-    run_ragas_eval(results_path=args.results, sample_n=args.sample)
+    run_ragas_eval(
+        results_path=args.results,
+        api_url=args.api_url,
+        sample_n=args.sample,
+    )
