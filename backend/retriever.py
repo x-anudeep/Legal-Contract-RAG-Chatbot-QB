@@ -168,12 +168,18 @@ class RealRetriever:
     def __init__(self) -> None:
         from qdrant_client import QdrantClient
         from rank_bm25 import BM25Okapi
-        from sentence_transformers import SentenceTransformer
 
         qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
         self.collection_name = os.getenv("QDRANT_COLLECTION", "cuad_contracts")
         self.client = QdrantClient(url=qdrant_url)
-        self.model = SentenceTransformer(os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"))
+        self.model = None
+
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self.model = SentenceTransformer(os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"))
+        except Exception as exc:
+            print(f"Embedding model unavailable; using BM25-only retrieval. Reason: {exc}")
 
         bm25_path = Path(os.getenv("BM25_INDEX_PATH", "ingestion/bm25_index.pkl"))
         with bm25_path.open("rb") as f:
@@ -183,15 +189,17 @@ class RealRetriever:
         self.chunk_ids: list[int] = bm25_data["chunk_ids"]
 
     def retrieve(self, query: str, clause_filter: str | None = None, top_k: int = 20) -> list[dict[str, Any]]:
-        q_vec = self.model.encode(query, normalize_embeddings=True).tolist()
         candidate_limit = max(top_k * 5, 50)
+        dense_ids: list[int] = []
 
-        dense_hits = self.client.search(
-            collection_name=self.collection_name,
-            query_vector=q_vec,
-            limit=candidate_limit,
-        )
-        dense_ids = [int(hit.id) for hit in dense_hits]
+        if self.model is not None:
+            q_vec = self.model.encode(query, normalize_embeddings=True).tolist()
+            dense_hits = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=q_vec,
+                limit=candidate_limit,
+            )
+            dense_ids = [int(hit.id) for hit in dense_hits]
 
         bm25_scores = self.bm25.get_scores(tokenize(query))
         bm25_ids = sorted(
@@ -201,7 +209,8 @@ class RealRetriever:
         )[:candidate_limit]
         bm25_ids = [int(self.chunk_ids[index]) for index in bm25_ids]
 
-        fused_ids = reciprocal_rank_fusion([dense_ids, bm25_ids])[:candidate_limit]
+        rank_lists = [ids for ids in [dense_ids, bm25_ids] if ids]
+        fused_ids = reciprocal_rank_fusion(rank_lists)[:candidate_limit]
         results = self.client.retrieve(
             collection_name=self.collection_name,
             ids=fused_ids,
