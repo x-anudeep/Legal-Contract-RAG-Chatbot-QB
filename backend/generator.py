@@ -13,8 +13,19 @@ SYSTEM_PROMPT = """You are a legal contract analyst assistant.
 
 Answer strictly from the provided contract excerpts. If the relevant clause is not present,
 say: "This clause was not found in the retrieved contract sections."
-Always cite the contract and clause type used for the answer."""
+Always cite the contract and clause type used for the answer.
+And also Summarize the Answer which must be concise and informative and also Understandable by any person who is also not a legal contract analyst and give it after a few lines."""
 
+
+DETAIL_QUERY_MARKERS = (
+    "explain",
+    "summarize",
+    "describe",
+    "tell me",
+    "what are",
+    "what is",
+    "list",
+)
 
 def _format_source(chunk: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -33,11 +44,22 @@ def _extractive_generate(query: str, chunks: list[dict[str, Any]]) -> str:
     best = chunks[0]
     clause_label = ", ".join(best.get("clause_categories", [])) or "Unlabeled"
     answers = [str(answer).strip() for answer in best.get("answers", []) if str(answer).strip()]
-    lead = answers[0] if answers else "Based on the retrieved excerpt"
+    text = str(best.get("text", "")).strip()
+    normalized_query = query.strip().lower()
+    is_detail_query = normalized_query.startswith(DETAIL_QUERY_MARKERS)
+    answer_is_booleanish = bool(answers) and answers[0].lower() in {"yes", "no"}
 
+    if answers and (not is_detail_query or not answer_is_booleanish):
+        lead = answers[0]
+    elif text:
+        lead = f"Based on the retrieved excerpt, {text}"
+    else:
+        lead = "Based on the retrieved excerpt"
+
+    lead = lead.rstrip(".")
     return (
         f"{lead}. Source: {best.get('contract_name')} ({clause_label}). "
-        f"Relevant text: \"{best.get('text', '')}\""
+        f"Relevant text: \"{text}\""
     )
 
 
@@ -74,7 +96,7 @@ def _gemini_generate(query: str, chunks: list[dict[str, Any]]) -> str:
         contents=_build_user_prompt(query, chunks),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            temperature=0,
+            temperature=0.5,
         ),
     )
     return response.text or ""
